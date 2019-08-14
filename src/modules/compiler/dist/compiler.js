@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 var path = require("path");
 var ts = require("typescript");
 var ngd_core_1 = require("@compodoc/ngd-core");
+var fs = require('fs');
+var DOMParser = require('dom-parser');
 var Compiler = /** @class */ (function () {
     function Compiler(files, options) {
         this.__cache = {};
@@ -22,6 +24,7 @@ var Compiler = /** @class */ (function () {
         var _this = this;
         var deps = [];
         var sourceFiles = this.program.getSourceFiles() || [];
+        this.buildCache(sourceFiles);
         sourceFiles.map(function (file) {
             var filePath = file.fileName;
             if (path.extname(filePath) === '.ts') {
@@ -39,8 +42,147 @@ var Compiler = /** @class */ (function () {
         });
         return deps;
     };
+    Compiler.prototype.buildCache = function (sourceFiles) {
+        var _this = this;
+        sourceFiles.map(function (file) {
+            var filePath = file.fileName;
+            if (path.extname(filePath) === '.ts') {
+                if (filePath.lastIndexOf('.d.ts') === -1 && filePath.lastIndexOf('spec.ts') === -1) {
+                    ngd_core_1.logger.info('parsing', filePath);
+                    try {
+                        _this.buildComponentCache(file);
+                    }
+                    catch (e) {
+                        ngd_core_1.logger.trace(e, file.fileName);
+                    }
+                }
+            }
+        });
+    };
+    Compiler.prototype.buildComponentCache = function (srcFile) {
+        var _this = this;
+        var classMap = [];
+        srcFile.statements.filter(function (stmt) {
+            var st = stmt;
+            return stmt.kind == ts.SyntaxKind.ImportDeclaration && st.importClause &&
+                st.importClause.namedBindings && st.importClause.namedBindings.elements &&
+                st.moduleSpecifier && st.moduleSpecifier.text;
+        }).forEach(function (stmt) {
+            var st = stmt;
+            var importPath = null;
+            if (0 == st.moduleSpecifier.text.indexOf(".")) {
+                importPath = srcFile.fileName.split("/");
+                importPath.pop();
+                importPath.push(st.moduleSpecifier.text + ".ts");
+                importPath = path.normalize(importPath.join("/"));
+            }
+            else {
+                importPath = process.cwd().split("/");
+                importPath.push(st.moduleSpecifier.text + ".ts");
+                importPath = path.normalize(importPath.join("/"));
+            }
+            if (!fs.existsSync(importPath)) {
+                return;
+            }
+            st.importClause.namedBindings.elements.forEach(function (element) {
+                classMap[element.name.text] = importPath;
+            });
+        });
+        ts.forEachChild(srcFile, function (node) {
+            if (node.decorators) {
+                var visitNode = function (visitedNode, index) {
+                    var n = node;
+                    if (!n.name) {
+                        return;
+                    }
+                    var name = _this.getSymboleName(node);
+                    var deps = {};
+                    var metadata = node.decorators[node.decorators.length - 1];
+                    //let props = this.findProps(visitedNode);
+                    var props = visitedNode.expression.arguments[visitedNode.expression.arguments.length - 1].properties;
+                    if (_this.isModule(metadata)) {
+                        return;
+                        deps = {
+                            name: name,
+                            file: srcFile.fileName.split('/').splice(-3).join('/'),
+                            providers: _this.getModuleProviders(props),
+                            declarations: _this.getModuleDeclations(classMap, props),
+                            imports: _this.getModuleImports(props),
+                            exports: _this.getModuleExports(props),
+                            bootstrap: _this.getModuleBootstrap(props),
+                            __raw: props
+                        };
+                    }
+                    else if (_this.isComponent(metadata)) {
+                        deps = {
+                            name: name,
+                            file: srcFile.fileName.split('/').splice(-3).join('/'),
+                            selector: _this.getComponentSelector(props),
+                            providers: _this.getComponentProviders(props),
+                            templateUrl: _this.getComponentTemplateUrl(props),
+                            styleUrls: _this.getComponentStyleUrls(props),
+                            __raw: props
+                        };
+                        var folder = srcFile.fileName.split('/');
+                        folder.pop();
+                        deps.templatePath = [folder.join("/") + '/' + deps.templateUrl[0]];
+                        deps.name += " (" + deps.selector + ")";
+                    }
+                    var filepath = null;
+                    if (classMap[name]) {
+                        filepath = classMap[name];
+                    }
+                    else {
+                        filepath = path.normalize(srcFile.fileName);
+                    }
+                    _this.debug(deps);
+                    _this.__cache[filepath + "#" + name] = deps;
+                    _this.__cache[deps.selector] = deps;
+                };
+                var filterByDecorators = function (node) {
+                    if (node.expression && node.expression.expression) {
+                        return /(NgModule|Component)/.test(node.expression.expression.text);
+                    }
+                    return false;
+                };
+                node.decorators
+                    .filter(filterByDecorators)
+                    .forEach(visitNode);
+            }
+            else {
+                // process.stdout.write('.');
+            }
+        });
+    };
     Compiler.prototype.getSourceFileDecorators = function (srcFile, outputSymbols) {
         var _this = this;
+        var classMap = [];
+        srcFile.statements.filter(function (stmt) {
+            var st = stmt;
+            return stmt.kind == ts.SyntaxKind.ImportDeclaration && st.importClause &&
+                st.importClause.namedBindings && st.importClause.namedBindings.elements &&
+                st.moduleSpecifier && st.moduleSpecifier.text;
+        }).forEach(function (stmt) {
+            var st = stmt;
+            var importPath = null;
+            if (0 == st.moduleSpecifier.text.indexOf(".")) {
+                importPath = srcFile.fileName.split("/");
+                importPath.pop();
+                importPath.push(st.moduleSpecifier.text + ".ts");
+                importPath = path.normalize(importPath.join("/"));
+            }
+            else {
+                importPath = process.cwd().split("/");
+                importPath.push(st.moduleSpecifier.text + ".ts");
+                importPath = path.normalize(importPath.join("/"));
+            }
+            if (!fs.existsSync(importPath)) {
+                return;
+            }
+            st.importClause.namedBindings.elements.forEach(function (element) {
+                classMap[element.name.text] = importPath;
+            });
+        });
         ts.forEachChild(srcFile, function (node) {
             if (node.decorators) {
                 var visitNode = function (visitedNode, index) {
@@ -53,7 +195,7 @@ var Compiler = /** @class */ (function () {
                             name: name,
                             file: srcFile.fileName.split('/').splice(-3).join('/'),
                             providers: _this.getModuleProviders(props),
-                            declarations: _this.getModuleDeclations(props),
+                            declarations: _this.getModuleDeclations(classMap, props),
                             imports: _this.getModuleImports(props),
                             exports: _this.getModuleExports(props),
                             bootstrap: _this.getModuleBootstrap(props),
@@ -62,15 +204,24 @@ var Compiler = /** @class */ (function () {
                         outputSymbols.push(deps);
                     }
                     else if (_this.isComponent(metadata)) {
-                        deps = {
-                            name: name,
-                            file: srcFile.fileName.split('/').splice(-3).join('/'),
-                            selector: _this.getComponentSelector(props),
-                            providers: _this.getComponentProviders(props),
-                            templateUrl: _this.getComponentTemplateUrl(props),
-                            styleUrls: _this.getComponentStyleUrls(props),
-                            __raw: props
-                        };
+                        // deps = {
+                        //   name,
+                        //   file: srcFile.fileName.split('/').splice(-3).join('/'),
+                        //   selector: this.getComponentSelector(props),
+                        //   providers: this.getComponentProviders(props),
+                        //   templateUrl: this.getComponentTemplateUrl(props),
+                        //   styleUrls: this.getComponentStyleUrls(props),
+                        //   __raw: props
+                        // };
+                        var filepath = null;
+                        if (classMap[name]) {
+                            filepath = classMap[name];
+                        }
+                        else {
+                            filepath = path.normalize(srcFile.fileName);
+                        }
+                        deps = _this.__cache[filepath + "#" + name];
+                        deps.uses = _this.getComponentDependentDirectives(srcFile.fileName, deps, props);
                     }
                     _this.debug(deps);
                     _this.__cache[name] = deps;
@@ -93,7 +244,7 @@ var Compiler = /** @class */ (function () {
     Compiler.prototype.debug = function (deps) {
         ngd_core_1.logger.debug('debug', deps.name + ":");
         [
-            'imports', 'exports', 'declarations', 'providers', 'bootstrap'
+            'imports', 'exports', 'declarations', 'providers', 'bootstrap', 'uses'
         ].forEach(function (symbols) {
             if (deps[symbols] && deps[symbols].length > 0) {
                 ngd_core_1.logger.debug('', "- " + symbols + ":");
@@ -124,10 +275,17 @@ var Compiler = /** @class */ (function () {
     Compiler.prototype.findProps = function (visitedNode) {
         return visitedNode.expression.arguments.pop().properties;
     };
-    Compiler.prototype.getModuleDeclations = function (props) {
+    Compiler.prototype.getModuleDeclations = function (classMap, props) {
         var _this = this;
         return this.getSymbolDeps(props, 'declarations').map(function (name) {
-            var component = _this.findComponentSelectorByName(name);
+            var filepath = null;
+            if (classMap[name]) {
+                filepath = classMap[name];
+            }
+            else {
+                ngd_core_1.logger.error("Failed to find class with filepath " + filepath + " and name " + name);
+            }
+            var component = _this.findComponentSelectorByName(filepath + "#" + name);
             if (component) {
                 return component;
             }
@@ -158,6 +316,36 @@ var Compiler = /** @class */ (function () {
             return _this.parseDeepIndentifier(name);
         });
     };
+    Compiler.prototype.getComponentDependentDirectives = function (filename, deps, props) {
+        var result = [];
+        var contents = fs.readFileSync(deps.templatePath[0], 'utf8');
+        var domparser = new DOMParser();
+        var domdoc = domparser.parseFromString(contents);
+        var all = domdoc.getElementsByTagName("[a-zA-Z0-9-]+");
+        for (var i = 0, max = all.length; i < max; i++) {
+            var foundSelector = all[i].nodeName;
+            var component = this.__cache[foundSelector];
+            if (!component) {
+                // logger.warn('template-parsing', `Component with selector ${foundSelector} was not found in project`);
+                continue;
+            }
+            // logger.warn('template-parsing', `Component with selector ${foundSelector} was found in project`);
+            result.push(component);
+        }
+        return result;
+    };
+    // private getComponentDependentDirectives(filename, props: NodeObject[]): Dependencies[] {
+    //   // console.log(filename, props);
+    //   props.filter(prop => {
+    //     return prop.name.text == "templateUrl"
+    //   }).forEach(prop => {
+    //     console.log(filename, prop.initializer.text,);
+    //     templatePath =
+    //   });
+    //   return this.getSymbolDeps(props, 'providers').map((name) => {
+    //     return this.parseDeepIndentifier(name);
+    //   });
+    // }
     Compiler.prototype.getComponentDirectives = function (props) {
         var _this = this;
         return this.getSymbolDeps(props, 'directives').map(function (name) {
@@ -187,7 +375,7 @@ var Compiler = /** @class */ (function () {
         };
     };
     Compiler.prototype.getComponentTemplateUrl = function (props) {
-        return this.sanitizeUrls(this.getSymbolDeps(props, 'templateUrl'));
+        return this.sanitizeUrls(this.getSymbolDeps(props, 'templateUrl') || ["default"]);
     };
     Compiler.prototype.getComponentStyleUrls = function (props) {
         return this.sanitizeUrls(this.getSymbolDeps(props, 'styleUrls'));

@@ -4,12 +4,14 @@ export interface Dependencies {
     label?: string;
     file?: string;
     templateUrl?: string[];
+    templatePath?: string[];
     styleUrls?: string[];
     providers?: Dependencies[];
     imports?: Dependencies[];
     exports?: Dependencies[];
     declarations?: Dependencies[];
     bootstrap?: Dependencies[];
+    uses?: Dependencies[];
     __raw?: any;
 }
 export declare class Compiler {
@@ -21,6 +23,8 @@ export declare class Compiler {
     private unknown;
     constructor(files: string[], options: any);
     getDependencies(): Dependencies[];
+    buildCache(sourceFiles: any): void;
+    private buildComponentCache;
     private getSourceFileDecorators;
     private debug;
     private isComponent;
@@ -34,6 +38,7 @@ export declare class Compiler {
     private getModuleExports;
     private getModuleBootstrap;
     private getComponentProviders;
+    private getComponentDependentDirectives;
     private getComponentDirectives;
     private parseDeepIndentifier;
     private getComponentTemplateUrl;

@@ -44,6 +44,14 @@ export const LEGEND = `<
                 </tr>
             </table>
         </td>
+        <td>
+            <table BORDER="0">
+                <tr>
+                    <td bgcolor="#b3de69" width="20"></td>
+                    <td>  Uses</td>
+                </tr>
+            </table>
+        </td>
     </tr>
 </table>
 >`;
@@ -83,7 +91,8 @@ const loopBlock = (symbols, attrs, edge = '') => {
 export const DOT_TEMPLATE = `
 digraph dependencies {
   node [shape="rect", style="filled", colorscheme=###scheme###];
-  ranksep=0.4;
+  ranksep=1.8;
+  nodesep=0.8;
   compound=false;
   remincross=true;
   splines=true;
@@ -128,9 +137,19 @@ digraph dependencies {
         {{~}}
       }
 
+      subgraph "cluster_{{=mod.name}}_{{=declaration.name}}_uses" {
+        style="solid";
+        {{~declaration.uses :prov}}
+          node [fillcolor=7, shape="oval", style="filled"];
+          "{{=prov.name}}" -> "{{=declaration.name}}" [lhead="cluster_{{=mod.name}}_declarations" ltail="cluster_{{=mod.name}}_{{=declaration.name}}_uses"];
+        {{~}}
+      }
+
     {{~}}
 
     /* declarations:end */
+
+
 
     /* imports:start */
 

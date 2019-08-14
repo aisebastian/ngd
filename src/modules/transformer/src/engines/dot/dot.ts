@@ -3,17 +3,17 @@ import { logger } from '@compodoc/ngd-core';
 import { DOT_TEMPLATE, LEGEND } from './dot.template';
 
 export interface IOptions {
-	name?: string;
-	output?: string;
-	displayLegend?: boolean;
-	outputFormats?: string;
-    silent?: boolean;
-	dot?: {
-		shapeModules: string
-		shapeProviders: string
-		shapeDirectives: string
-		colorScheme: string
-	};
+  name?: string;
+  output?: string;
+  displayLegend?: boolean;
+  outputFormats?: string;
+  silent?: boolean;
+  dot?: {
+    shapeModules: string
+    shapeProviders: string
+    shapeDirectives: string
+    colorScheme: string
+  };
 }
 
 let fs = require('fs-extra');

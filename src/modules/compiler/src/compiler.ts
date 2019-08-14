@@ -1,6 +1,9 @@
 import * as path from 'path';
 import * as ts from 'typescript';
-import {logger, getNewLineCharacter, compilerHost, d } from '@compodoc/ngd-core';
+import { logger, getNewLineCharacter, compilerHost, d } from '@compodoc/ngd-core';
+
+var fs = require('fs');
+var DOMParser = require('dom-parser');
 
 
 interface NodeObject {
@@ -31,12 +34,14 @@ export interface Dependencies {
   label?: string;
   file?: string;
   templateUrl?: string[];
+  templatePath?: string[];
   styleUrls?: string[];
   providers?: Dependencies[];
   imports?: Dependencies[];
   exports?: Dependencies[];
   declarations?: Dependencies[];
   bootstrap?: Dependencies[];
+  uses?: Dependencies[];
   __raw?: any
 }
 
@@ -71,6 +76,8 @@ export class Compiler {
     let deps: Dependencies[] = [];
     let sourceFiles = this.program.getSourceFiles() || [];
 
+    this.buildCache(sourceFiles);
+
     sourceFiles.map((file: ts.SourceFile) => {
 
       let filePath = file.fileName;
@@ -98,7 +105,64 @@ export class Compiler {
   }
 
 
-  private getSourceFileDecorators(srcFile: ts.SourceFile, outputSymbols: Dependencies[]): void {
+
+  buildCache(sourceFiles) {
+    sourceFiles.map((file: ts.SourceFile) => {
+
+      let filePath = file.fileName;
+
+      if (path.extname(filePath) === '.ts') {
+
+        if (filePath.lastIndexOf('.d.ts') === -1 && filePath.lastIndexOf('spec.ts') === -1) {
+          logger.info('parsing', filePath);
+
+          try {
+            this.buildComponentCache(file);
+          }
+          catch (e) {
+            logger.trace(e, file.fileName);
+          }
+        }
+
+      }
+
+
+    });
+  }
+
+  private buildComponentCache(srcFile: ts.SourceFile): void {
+
+    let classMap = [];
+
+
+    srcFile.statements.filter(stmt => {
+      let st: any = stmt;
+      return stmt.kind == ts.SyntaxKind.ImportDeclaration && st.importClause &&
+        st.importClause.namedBindings && st.importClause.namedBindings.elements &&
+        st.moduleSpecifier && st.moduleSpecifier.text;
+    }).forEach(stmt => {
+
+      let st: any = stmt;
+      let importPath = null;
+
+      if (0 == st.moduleSpecifier.text.indexOf(".")) {
+        importPath = srcFile.fileName.split("/");
+        importPath.pop();
+        importPath.push(st.moduleSpecifier.text + ".ts")
+        importPath = path.normalize(importPath.join("/"));
+      } else {
+        importPath = process.cwd().split("/");
+        importPath.push(st.moduleSpecifier.text + ".ts")
+        importPath = path.normalize(importPath.join("/"));
+      }
+      if (!fs.existsSync(importPath)) {
+        return;
+      }
+      st.importClause.namedBindings.elements.forEach(element => {
+        classMap[element.name.text] = importPath;
+      })
+
+    });
 
     ts.forEachChild(srcFile, (node: ts.Node) => {
 
@@ -106,24 +170,29 @@ export class Compiler {
       if (node.decorators) {
 
         let visitNode = (visitedNode, index) => {
-
+          let n: any = node;
+          if (!n.name) {
+            return;
+          }
           let name = this.getSymboleName(node);
           let deps: Dependencies = <Dependencies>{};
-          let metadata = node.decorators[ node.decorators.length-1 ];
-          let props = this.findProps(visitedNode);
+          let metadata = node.decorators[node.decorators.length - 1];
+          //let props = this.findProps(visitedNode);
+          let props = visitedNode.expression.arguments[visitedNode.expression.arguments.length - 1].properties;
+
 
           if (this.isModule(metadata)) {
+            return;
             deps = {
               name,
               file: srcFile.fileName.split('/').splice(-3).join('/'),
               providers: this.getModuleProviders(props),
-              declarations: this.getModuleDeclations(props),
+              declarations: this.getModuleDeclations(classMap, props),
               imports: this.getModuleImports(props),
               exports: this.getModuleExports(props),
               bootstrap: this.getModuleBootstrap(props),
               __raw: props
             };
-            outputSymbols.push(deps);
           }
           else if (this.isComponent(metadata)) {
             deps = {
@@ -135,11 +204,127 @@ export class Compiler {
               styleUrls: this.getComponentStyleUrls(props),
               __raw: props
             };
+            let folder = srcFile.fileName.split('/');
+            folder.pop();
+            deps.templatePath = [folder.join("/") + '/' + deps.templateUrl[0]];
+            deps.name += ` (${deps.selector})`;
 
           }
 
-          this.debug(deps);
+          let filepath = null;
+          if (classMap[name]) {
+            filepath = classMap[name];
+          } else {
+            filepath = path.normalize(srcFile.fileName);
+          }
 
+          this.debug(deps);
+          this.__cache[`${filepath}#${name}`] = deps;
+          this.__cache[deps.selector] = deps;
+        }
+
+        let filterByDecorators = (node) => {
+          if (node.expression && node.expression.expression) {
+            return /(NgModule|Component)/.test(node.expression.expression.text)
+          }
+          return false;
+        };
+
+        node.decorators
+          .filter(filterByDecorators)
+          .forEach(visitNode);
+      }
+      else {
+        // process.stdout.write('.');
+      }
+
+    });
+
+  }
+
+  private getSourceFileDecorators(srcFile: ts.SourceFile, outputSymbols: Dependencies[]): void {
+    let classMap = [];
+
+
+    srcFile.statements.filter(stmt => {
+      let st: any = stmt;
+      return stmt.kind == ts.SyntaxKind.ImportDeclaration && st.importClause &&
+        st.importClause.namedBindings && st.importClause.namedBindings.elements &&
+        st.moduleSpecifier && st.moduleSpecifier.text;
+    }).forEach(stmt => {
+
+      let st: any = stmt;
+      let importPath = null;
+
+      if (0 == st.moduleSpecifier.text.indexOf(".")) {
+        importPath = srcFile.fileName.split("/");
+        importPath.pop();
+        importPath.push(st.moduleSpecifier.text + ".ts")
+        importPath = path.normalize(importPath.join("/"));
+      } else {
+        importPath = process.cwd().split("/");
+        importPath.push(st.moduleSpecifier.text + ".ts")
+        importPath = path.normalize(importPath.join("/"));
+      }
+      if (!fs.existsSync(importPath)) {
+        return;
+      }
+      st.importClause.namedBindings.elements.forEach(element => {
+        classMap[element.name.text] = importPath;
+      })
+
+    });
+
+    ts.forEachChild(srcFile, (node: ts.Node) => {
+
+
+      if (node.decorators) {
+
+        let visitNode = (visitedNode, index) => {
+
+          let name = this.getSymboleName(node);
+          let deps: Dependencies = <Dependencies>{};
+          let metadata = node.decorators[node.decorators.length - 1];
+          let props = this.findProps(visitedNode);
+
+
+          if (this.isModule(metadata)) {
+            deps = {
+              name,
+              file: srcFile.fileName.split('/').splice(-3).join('/'),
+              providers: this.getModuleProviders(props),
+              declarations: this.getModuleDeclations(classMap, props),
+              imports: this.getModuleImports(props),
+              exports: this.getModuleExports(props),
+              bootstrap: this.getModuleBootstrap(props),
+              __raw: props
+            };
+            outputSymbols.push(deps);
+          }
+          else if (this.isComponent(metadata)) {
+            // deps = {
+            //   name,
+            //   file: srcFile.fileName.split('/').splice(-3).join('/'),
+            //   selector: this.getComponentSelector(props),
+            //   providers: this.getComponentProviders(props),
+            //   templateUrl: this.getComponentTemplateUrl(props),
+            //   styleUrls: this.getComponentStyleUrls(props),
+            //   __raw: props
+            // };
+
+
+            let filepath = null;
+            if (classMap[name]) {
+              filepath = classMap[name];
+            } else {
+              filepath = path.normalize(srcFile.fileName);
+            }
+
+            deps = this.__cache[`${filepath}#${name}`];
+            deps.uses = this.getComponentDependentDirectives(srcFile.fileName, deps, props);
+          }
+
+          this.debug(deps);
           this.__cache[name] = deps;
         }
 
@@ -165,7 +350,7 @@ export class Compiler {
     logger.debug('debug', `${deps.name}:`);
 
     [
-      'imports', 'exports', 'declarations', 'providers', 'bootstrap'
+      'imports', 'exports', 'declarations', 'providers', 'bootstrap', 'uses'
     ].forEach(symbols => {
       if (deps[symbols] && deps[symbols].length > 0) {
         logger.debug('', `- ${symbols}:`);
@@ -203,14 +388,21 @@ export class Compiler {
     return visitedNode.expression.arguments.pop().properties;
   }
 
-  private getModuleDeclations(props: NodeObject[]): Dependencies[] {
+  private getModuleDeclations(classMap, props: NodeObject[]): Dependencies[] {
     return this.getSymbolDeps(props, 'declarations').map((name) => {
-      let component = this.findComponentSelectorByName(name);
+
+      let filepath = null;
+      if (classMap[name]) {
+        filepath = classMap[name];
+      } else {
+        logger.error(`Failed to find class with filepath ${filepath} and name ${name}`);
+      }
+
+      let component = this.findComponentSelectorByName(`${filepath}#${name}`);
 
       if (component) {
         return component;
       }
-
       return this.parseDeepIndentifier(name);
     });
   }
@@ -233,11 +425,49 @@ export class Compiler {
     });
   }
 
+
+
   private getComponentProviders(props: NodeObject[]): Dependencies[] {
     return this.getSymbolDeps(props, 'providers').map((name) => {
       return this.parseDeepIndentifier(name);
     });
   }
+  private getComponentDependentDirectives(filename, deps: Dependencies, props: NodeObject[]): Dependencies[] {
+    let result: Dependencies[] = [];
+
+    var contents = fs.readFileSync(deps.templatePath[0], 'utf8');
+
+    let domparser = new DOMParser();
+    let domdoc = domparser.parseFromString(contents);
+
+    var all = domdoc.getElementsByTagName("[a-zA-Z0-9-]+");
+
+    for (var i = 0, max = all.length; i < max; i++) {
+      let foundSelector = all[i].nodeName;
+      let component = this.__cache[foundSelector];
+      if (!component) {
+        // logger.warn('template-parsing', `Component with selector ${foundSelector} was not found in project`);
+        continue;
+      }
+      // logger.warn('template-parsing', `Component with selector ${foundSelector} was found in project`);
+
+      result.push(component);
+    }
+
+    return result;
+  }
+  // private getComponentDependentDirectives(filename, props: NodeObject[]): Dependencies[] {
+  //   // console.log(filename, props);
+  //   props.filter(prop => {
+  //     return prop.name.text == "templateUrl"
+  //   }).forEach(prop => {
+  //     console.log(filename, prop.initializer.text,);
+  //     templatePath =
+  //   });
+  //   return this.getSymbolDeps(props, 'providers').map((name) => {
+  //     return this.parseDeepIndentifier(name);
+  //   });
+  // }
 
   private getComponentDirectives(props: NodeObject[]): Dependencies[] {
     return this.getSymbolDeps(props, 'directives').map((name) => {
@@ -271,7 +501,7 @@ export class Compiler {
   }
 
   private getComponentTemplateUrl(props: NodeObject[]): string[] {
-    return this.sanitizeUrls(this.getSymbolDeps(props, 'templateUrl'));
+    return this.sanitizeUrls(this.getSymbolDeps(props, 'templateUrl') || ["default"]);
   }
 
   private getComponentStyleUrls(props: NodeObject[]): string[] {
